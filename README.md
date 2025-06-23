@@ -21,7 +21,7 @@ This is an Anthropic API proxy that translates API requests from Claude Code int
 
 1.  **Clone this repository**:
     ```bash
-    git clone https://github.com/chachakko/freecc.git
+    git clone https://github.com/chachako/freecc.git
     cd freecc
     ```
 

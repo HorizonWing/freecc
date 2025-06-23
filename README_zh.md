@@ -21,7 +21,7 @@
 
 1.  **克隆本仓库**:
     ```bash
-    git clone https://github.com/chachakko/freecc.git
+    git clone https://github.com/chachako/freecc.git
     cd freecc
     ```
 

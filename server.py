@@ -2,27 +2,168 @@ from fastapi import FastAPI, Request, HTTPException
 import uvicorn
 import logging
 import json
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 from typing import List, Dict, Any, Optional, Union, Literal
-import httpx
 import os
-from fastapi.responses import JSONResponse, StreamingResponse
-import litellm
+from fastapi.responses import StreamingResponse
+import os
 import uuid
 import time
 from dotenv import load_dotenv
-import re
-from datetime import datetime
 import sys
 import logging.handlers
+from litellm import register_model
+import litellm
+
+# The following imports are safe to have before model registration
+import uuid
+import time
+from dotenv import load_dotenv
+import sys
+import logging.handlers
+
+# It is crucial to import and register models BEFORE importing the main litellm library
+from litellm import register_model
+
+# --- Custom Model Registration for LiteLLM ---
+# This MUST be done before 'litellm' is used anywhere else.
+# The dictionary KEY must be the base model name, without the provider prefix.
+register_model({
+    "deepseek-r1-250528": {
+        "max_tokens": 8192,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 1.35e-06,
+        "output_cost_per_token": 5.4e-06,
+        "litellm_provider": "openai", # Use openai client for openai-compatible endpoints
+        "mode": "chat",
+        "supports_tool_choice": True,
+        "supports_reasoning": True,
+    },
+    "deepseek-v3": {
+        "max_tokens": 8192,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 1.14e-06,
+        "output_cost_per_token": 4.56e-06,
+        "litellm_provider": "openai", # Use openai client for openai-compatible endpoints
+        "mode": "chat",
+        "supports_tool_choice": True,
+    },
+    "gemini-2.5-pro": {
+        "max_tokens": 65535,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65535,
+        "max_images_per_prompt": 3000,
+        "max_videos_per_prompt": 10,
+        "max_video_length": 1,
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_pdf_size_mb": 30,
+        "input_cost_per_token": 1.25e-06,
+        "input_cost_per_token_above_200k_tokens": 2.5e-06,
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_above_200k_tokens": 1.5e-05,
+        "litellm_provider": "openai", # Use openai client for openai-compatible endpoints
+        "mode": "chat",
+        "supports_system_messages": True,
+        "supports_function_calling": True,
+        "supports_vision": True,
+        "supports_audio_input": True,
+        "supports_video_input": True,
+        "supports_pdf_input": True,
+        "supports_response_schema": True,
+        "supports_tool_choice": True,
+        "supports_reasoning": True,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_web_search": True
+    },
+    "gemini-2.5-flash": {
+        "max_tokens": 65535,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65535,
+        "max_images_per_prompt": 3000,
+        "max_videos_per_prompt": 10,
+        "max_video_length": 1,
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_pdf_size_mb": 30,
+        "input_cost_per_audio_token": 1e-06,
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 2.5e-06,
+        "output_cost_per_reasoning_token": 2.5e-06,
+        "litellm_provider": "openai", # Use openai client for openai-compatible endpoints
+        "mode": "chat",
+        "supports_reasoning": True,
+        "supports_system_messages": True,
+        "supports_function_calling": True,
+        "supports_vision": True,
+        "supports_response_schema": True,
+        "supports_audio_output": False,
+        "supports_tool_choice": True,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_parallel_function_calling": True,
+        "supports_web_search": True,
+        "supports_url_context": True,
+        "supports_pdf_input": True
+    },
+})
+
+# Now that models are registered, we can import the rest of litellm
+import litellm
 
 # Load environment variables from .env file
 load_dotenv()
 
 # --- Logging Configuration ---
-# Get root logger, set level to DEBUG to catch all messages
+# Get log levels from environment.
+# FILE_LOG_LEVEL controls the verbosity of claude-proxy.log. Default: DEBUG
+# CONSOLE_LOG_LEVEL controls the verbosity of the console output. Default: INFO
+FILE_LOG_LEVEL_STR = os.environ.get("FILE_LOG_LEVEL", "DEBUG").upper()
+CONSOLE_LOG_LEVEL_STR = os.environ.get("CONSOLE_LOG_LEVEL", "INFO").upper()
+
+try:
+    FILE_LOG_LEVEL = getattr(logging, FILE_LOG_LEVEL_STR)
+except AttributeError:
+    print(f"Warning: Invalid FILE_LOG_LEVEL '{FILE_LOG_LEVEL_STR}'. Defaulting to DEBUG.")
+    FILE_LOG_LEVEL = logging.DEBUG
+
+try:
+    CONSOLE_LOG_LEVEL = getattr(logging, CONSOLE_LOG_LEVEL_STR)
+except AttributeError:
+    print(f"Warning: Invalid CONSOLE_LOG_LEVEL '{CONSOLE_LOG_LEVEL_STR}'. Defaulting to INFO.")
+    CONSOLE_LOG_LEVEL = logging.INFO
+
+# The root logger's level must be the most verbose of all handlers
+root_logger_level = min(FILE_LOG_LEVEL, CONSOLE_LOG_LEVEL)
 root_logger = logging.getLogger()
-root_logger.setLevel(logging.DEBUG)
+root_logger.setLevel(root_logger_level)
+
 
 # Remove any existing handlers to prevent conflicts or duplication
 for handler in root_logger.handlers[:]:
@@ -32,14 +173,14 @@ for handler in root_logger.handlers[:]:
 file_handler = logging.handlers.RotatingFileHandler(
     "claude-proxy.log", maxBytes=10 * 1024 * 1024, backupCount=5  # 10MB file, 5 backups
 )
-file_handler.setLevel(logging.DEBUG)  # Log everything to the file
+file_handler.setLevel(FILE_LOG_LEVEL)  # Use the configured level for the file
 file_formatter = logging.Formatter('%(asctime)s - %(levelname)s [%(name)s] - %(message)s')
 file_handler.setFormatter(file_formatter)
 root_logger.addHandler(file_handler)
 
 # Create a console handler to show messages on the console
 console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(logging.INFO)  # Only show INFO and higher on console
+console_handler.setLevel(CONSOLE_LOG_LEVEL)  # Use the configured level for the console
 
 # Add console handler to the root logger
 root_logger.addHandler(console_handler)
@@ -113,22 +254,30 @@ for handler in logging.getLogger().handlers:
 app = FastAPI()
 
 # Get API keys/credentials from environment
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-OPENAI_API_BASE = os.environ.get("OPENAI_API_BASE") # Custom base URL for OpenAI-compatible APIs
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+ANTHROPIC_API_BASE = os.environ.get("ANTHROPIC_API_BASE", "").strip()
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
+OPENAI_API_BASE = os.environ.get("OPENAI_API_BASE", "").strip() # Custom base URL for OpenAI-compatible APIs
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+GEMINI_API_BASE = os.environ.get("GEMINI_API_BASE", "").strip()
 
 if OPENAI_API_BASE:
     logger.info(f"🟢 OpenAI custom base URL configured: {OPENAI_API_BASE}")
 
+if GEMINI_API_BASE:
+    logger.info(f"🟡 Gemini custom base URL configured: {GEMINI_API_BASE}")
+
+if ANTHROPIC_API_BASE:
+    logger.info(f"🔵 Anthropic custom base URL configured: {ANTHROPIC_API_BASE}")
+
 # For Vertex AI, LiteLLM typically uses Application Default Credentials (ADC)
 # Ensure ADC is set up (e.g., `gcloud auth application-default login`)
 # Or set GOOGLE_APPLICATION_CREDENTIALS environment variable
-VERTEX_PROJECT_ID = os.environ.get("VERTEX_PROJECT_ID") # Required by LiteLLM for Vertex
-VERTEX_LOCATION = os.environ.get("VERTEX_LOCATION", "us-central1")  # Required by LiteLLM for Vertex
+VERTEX_PROJECT_ID = os.environ.get("VERTEX_PROJECT_ID", "").strip() # Required by LiteLLM for Vertex
+VERTEX_LOCATION = os.environ.get("VERTEX_LOCATION", "us-central1").strip()  # Required by LiteLLM for Vertex
 
 # Check if Vertex AI credentials are properly configured
-GOOGLE_APPLICATION_CREDENTIALS = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+GOOGLE_APPLICATION_CREDENTIALS = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
 if VERTEX_PROJECT_ID:
     logger.info(f"🔵 Vertex AI Project ID configured: {VERTEX_PROJECT_ID}")
     logger.info(f"🔵 Vertex AI Location configured: {VERTEX_LOCATION}")
@@ -140,36 +289,34 @@ else:
     logger.warning("⚠️ VERTEX_PROJECT_ID not set. Vertex AI models will not work correctly without it.")
 
 # API Key for xAI
-XAI_API_KEY = os.environ.get("XAI_API_KEY")
+XAI_API_KEY = os.environ.get("XAI_API_KEY", "").strip()
+XAI_API_BASE = os.environ.get("XAI_API_BASE", "").strip()
 if XAI_API_KEY:
     logger.info("🟣 xAI API key configured")
 else:
     logger.warning("⚠️ XAI_API_KEY not set. xAI models will not work without it.")
 
-# GROQ_API_KEY removed
-
-# Get preferred provider (default to openai)
-# Possible values: 'openai', 'google', 'vertex', 'xai'
-# PREFERRED_PROVIDER = os.environ.get("PREFERRED_PROVIDER", "openai").lower()
-# logger.info(f"🔧 Preferred provider set to: {PREFERRED_PROVIDER}")
-
-# Get model mapping configuration from environment
-# Default to latest OpenAI models if not set
-# BIG_MODEL = os.environ.get("BIG_MODEL", "gpt-4.1")
-# SMALL_MODEL = os.environ.get("SMALL_MODEL", "gpt-4.1-mini")
+# API Key for Anthropic
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+if ANTHROPIC_API_KEY:
+    logger.info("🔵 Anthropic API key configured")
+else:
+    logger.warning("⚠️ ANTHROPIC_API_KEY not set. Anthropic models will not work without it.")
 
 # --- New, more flexible model routing configuration ---
-BIG_MODEL_PROVIDER = os.environ.get("BIG_MODEL_PROVIDER", "openai").lower()
-BIG_MODEL_NAME = os.environ.get("BIG_MODEL_NAME", "gpt-4.1")
-SMALL_MODEL_PROVIDER = os.environ.get("SMALL_MODEL_PROVIDER", "openai").lower()
-SMALL_MODEL_NAME = os.environ.get("SMALL_MODEL_NAME", "gpt-4.1-mini")
+BIG_MODEL_PROVIDER = os.environ.get("BIG_MODEL_PROVIDER", "openai").strip().lower()
+BIG_MODEL_NAME = os.environ.get("BIG_MODEL_NAME", "gpt-4.1").strip()
+BIG_MODEL_API_KEY = os.environ.get("BIG_MODEL_API_KEY", "").strip()
+BIG_MODEL_API_BASE = os.environ.get("BIG_MODEL_API_BASE", "").strip()
+
+# Small model configs fall back to big model configs if not explicitly set
+SMALL_MODEL_PROVIDER = (os.environ.get("SMALL_MODEL_PROVIDER", "").strip() or BIG_MODEL_PROVIDER).lower()
+SMALL_MODEL_NAME = os.environ.get("SMALL_MODEL_NAME", "").strip() or BIG_MODEL_NAME
+SMALL_MODEL_API_KEY = os.environ.get("SMALL_MODEL_API_KEY", "").strip() or BIG_MODEL_API_KEY
+SMALL_MODEL_API_BASE = os.environ.get("SMALL_MODEL_API_BASE", "").strip() or BIG_MODEL_API_BASE
 
 logger.info(f"🔧 Big model mapping: 'sonnet' -> {BIG_MODEL_PROVIDER}/{BIG_MODEL_NAME}")
 logger.info(f"🔧 Small model mapping: 'haiku' -> {SMALL_MODEL_PROVIDER}/{SMALL_MODEL_NAME}")
-
-# Model lists (OPENAI_MODELS, GEMINI_MODELS, VERTEX_AI_MODELS, XAI_MODELS) have been removed
-# to allow for flexible, user-defined model names.
-# The logic now relies on provider prefixes (e.g., 'openai/') in the model name.
 
 # Helper function to clean schema for Gemini/Vertex
 def clean_gemini_schema(schema: Any) -> Any:
@@ -249,24 +396,28 @@ class MessagesRequest(BaseModel):
     original_model: Optional[str] = None  # Will store the original model name
     is_mapped: bool = False # Internal flag to track if the model was mapped
 
-    @field_validator('model')
-    def validate_model_field(cls, v, info): # Renamed to avoid conflict
-        original_model = v
-        new_model = v # Default to original value
-        is_mapped_flag = False
+    @model_validator(mode='before')
+    @classmethod
+    def remap_model_and_set_flag(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
 
+        original_model = data.get('model')
+        if not original_model:
+            return data
+        
+        new_model = original_model
+        mapped = False
+        
         logger.debug(f"📋 MODEL VALIDATION: Original='{original_model}'")
 
         # Remove provider prefixes for haiku/sonnet matching
-        clean_v = v
+        clean_v = original_model
         if '/' in clean_v:
             # e.g., "openai/claude-3-haiku-20240307" -> "claude-3-haiku-20240307"
             clean_v = clean_v.split('/', 1)[1]
 
         # --- Mapping Logic --- START ---
-        mapped = False
-
-        # Map Haiku (small) and Sonnet (big) based on independent provider configurations
         if 'haiku' in clean_v.lower():
             provider = SMALL_MODEL_PROVIDER
             if provider == "vertex": provider = "vertex_ai" # LiteLLM prefix for vertex
@@ -292,22 +443,16 @@ class MessagesRequest(BaseModel):
             else:
                 logger.info(f"📌 MODEL MAPPING: '{original_model}' ➡️ '{new_model}'")
         else:
-             # If no mapping occurred, use the original model name.
-             # If it's prefixed, the downstream logic will handle it.
-             # If it's not prefixed, it will default to Anthropic or fail if no key is found.
-             new_model = v
-             if not v.startswith(('openai/', 'gemini/', 'anthropic/', 'vertex_ai/', 'xai/')):
+             if not original_model.startswith(('openai/', 'gemini/', 'anthropic/', 'vertex_ai/', 'xai/')):
                  logger.warning(f"⚠️ No prefix or mapping rule for model: '{original_model}'. Using as is. It will default to the Anthropic provider if not otherwise handled.")
              else:
                  logger.debug(f"ℹ️ Using already prefixed model: '{new_model}'")
 
-        # Store the original model in the values dictionary
-        values = info.data
-        if isinstance(values, dict):
-            values['original_model'] = original_model
-            values['is_mapped'] = is_mapped_flag
+        data['model'] = new_model
+        data['original_model'] = original_model
+        data['is_mapped'] = mapped
 
-        return new_model
+        return data
 
 class TokenCountRequest(BaseModel):
     model: str
@@ -319,23 +464,27 @@ class TokenCountRequest(BaseModel):
     original_model: Optional[str] = None  # Will store the original model name
     is_mapped: bool = False # Internal flag to track if the model was mapped
 
-    @field_validator('model')
-    def validate_model_token_count(cls, v, info): # Renamed to avoid conflict
-        # Use the same logic as MessagesRequest validator
-        original_model = v
-        new_model = v # Default to original value
-        is_mapped_flag = False
+    @model_validator(mode='before')
+    @classmethod
+    def remap_model_and_set_flag(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
 
+        original_model = data.get('model')
+        if not original_model:
+            return data
+        
+        new_model = original_model
+        mapped = False
+        
         logger.debug(f"📋 TOKEN COUNT VALIDATION: Original='{original_model}'")
 
         # Remove provider prefixes for haiku/sonnet matching
-        clean_v = v
+        clean_v = original_model
         if '/' in clean_v:
             clean_v = clean_v.split('/', 1)[1]
 
         # --- Mapping Logic --- START ---
-        mapped = False
-
         if 'haiku' in clean_v.lower():
             provider = SMALL_MODEL_PROVIDER
             if provider == "vertex": provider = "vertex_ai"
@@ -351,18 +500,14 @@ class TokenCountRequest(BaseModel):
         if mapped:
             logger.debug(f"📌 TOKEN COUNT MAPPING: '{original_model}' ➡️ '{new_model}'")
         else:
-             new_model = v # Use the original value
-             if not v.startswith(('openai/', 'gemini/', 'anthropic/', 'vertex_ai/', 'xai/')):
+             if not original_model.startswith(('openai/', 'gemini/', 'anthropic/', 'vertex_ai/', 'xai/')):
                  logger.warning(f"⚠️ No prefix or mapping rule for token count model: '{original_model}'. Using as is.")
-             # else: it's already prefixed, no special log needed here
 
-        # Store the original model in the values dictionary
-        values = info.data
-        if isinstance(values, dict):
-            values['original_model'] = original_model
-            values['is_mapped'] = is_mapped_flag
+        data['model'] = new_model
+        data['original_model'] = original_model
+        data['is_mapped'] = mapped
 
-        return new_model
+        return data
 
 class TokenCountResponse(BaseModel):
     input_tokens: int
@@ -510,19 +655,14 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
                                       messages.append({"role": msg.role, "content": None, "tool_calls": []})
                                  messages[-1]["tool_calls"].append(tool_call_data)
                              else:
-                                 logger.error("Invalid Request: A 'tool_use' content block is only allowed in an 'assistant' message. This block will be ignored.")
+                                 logger.warning(f"Unexpected tool_use block in user message: {block}")
 
                         elif block.type == "tool_result":
-                             if msg.role == 'user':
-                                 messages.append({
-                                     "role": "tool",
-                                     "tool_call_id": block.tool_use_id,
-                                     "content": parse_tool_result_content(getattr(block, "content", None))
-                                 })
-                             else:
-                                 logger.error("Invalid Request: A 'tool_result' content block is only allowed in a 'user' message. This block will be ignored.")
-                        else:
-                            logger.error(f"Unsupported content block type: '{getattr(block, 'type', 'unknown')}'. This block will be ignored.")
+                             messages.append({
+                                 "role": "tool",
+                                 "tool_call_id": block.tool_use_id,
+                                 "content": parse_tool_result_content(getattr(block, "content", None))
+                             })
                 if processed_content:
                      if messages and messages[-1]["role"] == "assistant" and messages[-1].get("content") is None and messages[-1].get("tool_calls"):
                          messages[-1]["content"] = processed_content
@@ -589,7 +729,14 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
         # Add the format expected by the downstream API
         litellm_request["thinking"] = {"enabled": True}
         logger.debug("💡 Added 'thinking: {\"enabled\": True}' to LiteLLM request.")
-    # Else: if thinking is None or type != "enabled", don't add thinking field
+
+    if LOG_REQUEST_BODY:
+        # Log the request for debugging, filtering out the API key.
+        request_for_logging = {k: v for k, v in litellm_request.items() if k != 'api_key'}
+        try:
+            logger.debug(f"LiteLLM Request Body:\n{json.dumps(request_for_logging, indent=2, ensure_ascii=False)}")
+        except Exception:
+            logger.debug(f"LiteLLM Request Body (fallback): {request_for_logging}")
 
     return litellm_request
 
@@ -765,43 +912,91 @@ async def create_message(
             # Tier 1: Mapped requests ('sonnet'/'haiku') use their specific configurations.
             original_clean = original_model_for_display.split('/')[-1]
             if 'haiku' in original_clean.lower():
-                if SMALL_MODEL_API_KEY: litellm_request["api_key"] = SMALL_MODEL_API_KEY
-                if SMALL_MODEL_API_BASE: litellm_request["api_base"] = SMALL_MODEL_API_BASE
-                logger.debug(f"Using SMALL model mapped credentials for {request.model}")
+                api_key_to_use = SMALL_MODEL_API_KEY or (BIG_MODEL_API_KEY if SMALL_MODEL_PROVIDER == BIG_MODEL_PROVIDER else None)
+                api_base_to_use = SMALL_MODEL_API_BASE or (BIG_MODEL_API_BASE if SMALL_MODEL_PROVIDER == BIG_MODEL_PROVIDER else None)
+                provider_for_key = SMALL_MODEL_PROVIDER
+
+                if not api_key_to_use:
+                    if provider_for_key == "openai": api_key_to_use = OPENAI_API_KEY
+                    elif provider_for_key == "gemini": api_key_to_use = GEMINI_API_KEY
+                    elif provider_for_key == "anthropic": api_key_to_use = ANTHROPIC_API_KEY
+                    elif provider_for_key == "xai": api_key_to_use = XAI_API_KEY
+
+                if not api_base_to_use:
+                    if provider_for_key == "openai": api_base_to_use = OPENAI_API_BASE
+                    elif provider_for_key == "gemini": api_base_to_use = GEMINI_API_BASE
+                    elif provider_for_key == "anthropic": api_base_to_use = ANTHROPIC_API_BASE
+                    elif provider_for_key == "xai": api_base_to_use = XAI_API_BASE
+                
+                if not api_key_to_use and provider_for_key != "vertex_ai":
+                    raise HTTPException(status_code=401, detail=f"No API key found for SMALL model provider '{provider_for_key}'. Please set SMALL_MODEL_API_KEY or the global {provider_for_key.upper()}_API_KEY.")
+                
+                if api_key_to_use: litellm_request["api_key"] = api_key_to_use
+                if api_base_to_use: litellm_request["api_base"] = api_base_to_use
+                logger.debug(f"Using credentials for SMALL model provider '{provider_for_key}' for request to {request.model}")
+
             elif 'sonnet' in original_clean.lower():
-                if BIG_MODEL_API_KEY: litellm_request["api_key"] = BIG_MODEL_API_KEY
-                if BIG_MODEL_API_BASE: litellm_request["api_base"] = BIG_MODEL_API_BASE
-                logger.debug(f"Using BIG model mapped credentials for {request.model}")
+                api_key_to_use = BIG_MODEL_API_KEY
+                api_base_to_use = BIG_MODEL_API_BASE
+                provider_for_key = BIG_MODEL_PROVIDER
+
+                if not api_key_to_use:
+                    if provider_for_key == "openai": api_key_to_use = OPENAI_API_KEY
+                    elif provider_for_key == "gemini": api_key_to_use = GEMINI_API_KEY
+                    elif provider_for_key == "anthropic": api_key_to_use = ANTHROPIC_API_KEY
+                    elif provider_for_key == "xai": api_key_to_use = XAI_API_KEY
+
+                if not api_base_to_use:
+                    if provider_for_key == "openai": api_base_to_use = OPENAI_API_BASE
+                    elif provider_for_key == "gemini": api_base_to_use = GEMINI_API_BASE
+                    elif provider_for_key == "anthropic": api_base_to_use = ANTHROPIC_API_BASE
+                    elif provider_for_key == "xai": api_base_to_use = XAI_API_BASE
+
+                if not api_key_to_use and provider_for_key != "vertex_ai":
+                     raise HTTPException(status_code=401, detail=f"No API key found for BIG model provider '{provider_for_key}'. Please set BIG_MODEL_API_KEY or the global {provider_for_key.upper()}_API_KEY.")
+
+                if api_key_to_use: litellm_request["api_key"] = api_key_to_use
+                if api_base_to_use: litellm_request["api_base"] = api_base_to_use
+                logger.debug(f"Using credentials for BIG model provider '{provider_for_key}' for request to {request.model}")
         else:
             # Tier 2: Direct, prefixed requests use the global provider configurations.
             provider = request.model.split('/')[0] if '/' in request.model else None
             if provider == "openai":
-                if OPENAI_API_KEY: litellm_request["api_key"] = OPENAI_API_KEY
+                if not OPENAI_API_KEY:
+                    raise HTTPException(status_code=401, detail=f"OPENAI_API_KEY not set for model {request.model}. Please configure it in your .env file.")
+                litellm_request["api_key"] = OPENAI_API_KEY
                 if OPENAI_API_BASE: litellm_request["api_base"] = OPENAI_API_BASE
                 logger.debug(f"Using global OpenAI credentials for {request.model}")
             elif provider == "gemini":
-                if GEMINI_API_KEY: litellm_request["api_key"] = GEMINI_API_KEY
+                if not GEMINI_API_KEY:
+                    raise HTTPException(status_code=401, detail=f"GEMINI_API_KEY not set for model {request.model}. Please configure it in your .env file.")
+                litellm_request["api_key"] = GEMINI_API_KEY
                 if GEMINI_API_BASE: litellm_request["api_base"] = GEMINI_API_BASE
                 logger.debug(f"Using global Gemini credentials for {request.model}")
             elif provider == "xai":
-                if XAI_API_KEY: litellm_request["api_key"] = XAI_API_KEY
+                if not XAI_API_KEY:
+                    raise HTTPException(status_code=401, detail=f"XAI_API_KEY not set for model {request.model}. Please configure it in your .env file.")
+                litellm_request["api_key"] = XAI_API_KEY
                 if XAI_API_BASE: litellm_request["api_base"] = XAI_API_BASE
                 logger.debug(f"Using global xAI credentials for {request.model}")
             elif provider == "anthropic":
-                if ANTHROPIC_API_KEY: litellm_request["api_key"] = ANTHROPIC_API_KEY
+                if not ANTHROPIC_API_KEY:
+                     raise HTTPException(status_code=401, detail=f"ANTHROPIC_API_KEY not set for model {request.model}. Please configure it in your .env file.")
+                litellm_request["api_key"] = ANTHROPIC_API_KEY
                 if ANTHROPIC_API_BASE: litellm_request["api_base"] = ANTHROPIC_API_BASE
                 logger.debug(f"Using global Anthropic credentials for {request.model}")
             elif provider == "vertex_ai":
                 # Vertex AI uses project/location instead of a single base URL.
-                if VERTEX_PROJECT_ID:
-                    litellm_request["vertex_project"] = VERTEX_PROJECT_ID
-                    litellm_request["vertex_location"] = VERTEX_LOCATION
-                    logger.debug(f"Using Vertex AI credentials for {request.model}")
-                else:
-                    logger.warning(f"⚠️ VERTEX_PROJECT_ID not set for Vertex AI model {request.model}.")
+                if not VERTEX_PROJECT_ID:
+                    raise HTTPException(status_code=401, detail=f"VERTEX_PROJECT_ID not set for Vertex AI model {request.model}. Please configure it in your .env file.")
+                litellm_request["vertex_project"] = VERTEX_PROJECT_ID
+                litellm_request["vertex_location"] = VERTEX_LOCATION
+                logger.debug(f"Using Vertex AI credentials for {request.model}")
             else:
-                # Fallback for models without a known prefix or a dedicated API key.
-                if ANTHROPIC_API_KEY: litellm_request["api_key"] = ANTHROPIC_API_KEY
+                # Fallback for models without a known prefix, defaults to Anthropic
+                if not ANTHROPIC_API_KEY:
+                    raise HTTPException(status_code=401, detail=f"No provider prefix found for '{request.model}', and fallback ANTHROPIC_API_KEY is not set.")
+                litellm_request["api_key"] = ANTHROPIC_API_KEY
                 logger.debug(f"Using default Anthropic API key for model: {request.model}")
 
         if LOG_REQUEST_BODY:

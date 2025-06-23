@@ -67,9 +67,18 @@ This is an Anthropic API proxy that translates API requests from Claude Code int
     -   `VERTEX_LOCATION`: The region for your Vertex AI resources.
     -   Set up Application Default Credentials (ADC) via `gcloud` or set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable.
 
+    **Logging Configuration**
+
+    You can control the logging behavior via the `.env` file:
+    -   `FILE_LOG_LEVEL`: Sets the log level for `claude-proxy.log`. Defaults to `DEBUG`.
+    -   `CONSOLE_LOG_LEVEL`: Sets the log level for the console output. Defaults to `INFO`.
+        -   Supported levels: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`.
+    -   `LOG_REQUEST_BODY`: Set to `true` to log the full body of incoming requests. This is highly recommended if you are interested in the prompt engineering behind Claude Code 🤑.
+    -   `LOG_RESPONSE_BODY`: Set to `true` to log the full body of responses from the downstream model.
+
 4.  **Run the server**:
     ```bash
-    uv run uvicorn server:app --host 0.0.0.0 --port 8082 --reload
+    uv run uvicorn server:app --host 127.0.0.1 --port 8082 --reload
     ```
     *(`--reload` is optional for development)*
 
@@ -133,8 +142,6 @@ The process is as follows:
 4.  **Send Request**: Sends the translated request to the selected provider.
 5.  **Translate Response**: Converts the provider's response back to the Anthropic format.
 6.  **Return Response**: Returns the formatted response to the client.
-
-> If you are interested in the prompt engineering behind Claude Code, set `LOG_REQUEST_BODY=true` in your `.env` file, and this proxy will print the complete request to the `claude-proxy.log` file.
 
 ## Vibe
 

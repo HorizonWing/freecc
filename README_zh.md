@@ -67,9 +67,18 @@
     -   `VERTEX_LOCATION`: 您的 Vertex AI 资源所在的区域。
     -   请通过 `gcloud` 设置应用默认凭证 (ADC)，或设置 `GOOGLE_APPLICATION_CREDENTIALS` 环境变量。
 
+    **日志配置**
+
+    您可以通过 `.env` 文件控制日志行为：
+    -   `FILE_LOG_LEVEL`: 设置 `claude-proxy.log` 文件的日志级别。默认为 `DEBUG`。
+    -   `CONSOLE_LOG_LEVEL`: 设置控制台输出的日志级别。默认为 `INFO`。
+        -   支持的级别: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`。
+    -   `LOG_REQUEST_BODY`: 设置为 `true` 以记录传入请求的完整内容。如果你对 Claude Code 背后的提示词工程感兴趣，则开启此选项 🤑。
+    -   `LOG_RESPONSE_BODY`: 设置为 `true` 以记录下游模型的完整响应内容。
+
 4.  **运行服务器**:
     ```bash
-    uv run uvicorn server:app --host 0.0.0.0 --port 8082 --reload
+    uv run uvicorn server:app --host 127.0.0.1 --port 8082 --reload
     ```
     *(`--reload` 为可选参数，适用于开发环境)*
 
@@ -133,9 +142,6 @@ SMALL_MODEL_API_KEY="lm-studio" # 本地模型可能不需要密钥
 4.  **发送请求**: 将转换后的请求发送至选定的提供商
 5.  **转换响应**: 将提供商的响应转换回 Anthropic 格式
 6.  **返回响应**: 将格式化后的响应返回给客户端
-
-
-> 如果你对 Claude Code 背后的提示词工程感兴趣，你在 `.env` 文件中设置 `LOG_REQUEST_BODY=true`，本代理会将完整的请求打印到 `claude-proxy.log` 文件中。
 
 ## Vibe
 

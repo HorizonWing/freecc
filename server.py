@@ -14,23 +14,52 @@ from dotenv import load_dotenv
 import re
 from datetime import datetime
 import sys
+import logging.handlers
 
 # Load environment variables from .env file
 load_dotenv()
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,  # Set to INFO level to show more details
-    format='%(asctime)s - %(levelname)s - %(message)s',
+# --- Logging Configuration ---
+# Get root logger, set level to DEBUG to catch all messages
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.DEBUG)
+
+# Remove any existing handlers to prevent conflicts or duplication
+for handler in root_logger.handlers[:]:
+    root_logger.removeHandler(handler)
+
+# Create a file handler to log messages to a file
+file_handler = logging.handlers.RotatingFileHandler(
+    "claude-proxy.log", maxBytes=10 * 1024 * 1024, backupCount=5  # 10MB file, 5 backups
 )
+file_handler.setLevel(logging.DEBUG)  # Log everything to the file
+file_formatter = logging.Formatter('%(asctime)s - %(levelname)s [%(name)s] - %(message)s')
+file_handler.setFormatter(file_formatter)
+root_logger.addHandler(file_handler)
+
+# Create a console handler to show messages on the console
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)  # Only show INFO and higher on console
+
+# Add console handler to the root logger
+root_logger.addHandler(console_handler)
+
+# Get a logger for the current module
 logger = logging.getLogger(__name__)
 
+# --- Environment variable for logging ---
+LOG_REQUEST_BODY = os.environ.get("LOG_REQUEST_BODY", "false").lower() == "true"
+LOG_RESPONSE_BODY = os.environ.get("LOG_RESPONSE_BODY", "false").lower() == "true"
+
+if LOG_REQUEST_BODY:
+    logger.info("📄 Full request body logging is ENABLED.")
+if LOG_RESPONSE_BODY:
+    logger.info("📄 Full response body logging is ENABLED.")
+
 # Configure uvicorn to be quieter
-import uvicorn
 # Tell uvicorn's loggers to be quiet
 logging.getLogger("uvicorn").setLevel(logging.WARNING)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
 
 # Create a filter to block any log messages containing specific strings
 class MessageFilter(logging.Filter):
@@ -71,13 +100,13 @@ class ColorizedFormatter(logging.Formatter):
     BOLD = "\033[1m"
 
     def format(self, record):
-        if record.levelno == logging.DEBUG and isinstance(record.msg, str) and "MODEL MAPPING" in record.msg:
+        if record.levelno == logging.INFO and isinstance(record.msg, str) and "MODEL MAPPING" in record.msg:
             # Apply colors and formatting to model mapping logs
             return f"{self.BOLD}{self.GREEN}{record.msg}{self.RESET}"
         return super().format(record)
 
 # Apply custom formatter to console handler
-for handler in logger.handlers:
+for handler in logging.getLogger().handlers:
     if isinstance(handler, logging.StreamHandler):
         handler.setFormatter(ColorizedFormatter('%(asctime)s - %(levelname)s - %(message)s'))
 
@@ -86,7 +115,11 @@ app = FastAPI()
 # Get API keys/credentials from environment
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+OPENAI_API_BASE = os.environ.get("OPENAI_API_BASE") # Custom base URL for OpenAI-compatible APIs
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+
+if OPENAI_API_BASE:
+    logger.info(f"🟢 OpenAI custom base URL configured: {OPENAI_API_BASE}")
 
 # For Vertex AI, LiteLLM typically uses Application Default Credentials (ADC)
 # Ensure ADC is set up (e.g., `gcloud auth application-default login`)
@@ -117,62 +150,26 @@ else:
 
 # Get preferred provider (default to openai)
 # Possible values: 'openai', 'google', 'vertex', 'xai'
-PREFERRED_PROVIDER = os.environ.get("PREFERRED_PROVIDER", "openai").lower()
-logger.info(f"🔧 Preferred provider set to: {PREFERRED_PROVIDER}")
+# PREFERRED_PROVIDER = os.environ.get("PREFERRED_PROVIDER", "openai").lower()
+# logger.info(f"🔧 Preferred provider set to: {PREFERRED_PROVIDER}")
 
 # Get model mapping configuration from environment
 # Default to latest OpenAI models if not set
-BIG_MODEL = os.environ.get("BIG_MODEL", "gpt-4.1")
-SMALL_MODEL = os.environ.get("SMALL_MODEL", "gpt-4.1-mini")
+# BIG_MODEL = os.environ.get("BIG_MODEL", "gpt-4.1")
+# SMALL_MODEL = os.environ.get("SMALL_MODEL", "gpt-4.1-mini")
 
-# List of OpenAI models
-OPENAI_MODELS = [
-    "o3-mini",
-    "o1",
-    "o1-mini",
-    "o1-pro",
-    "gpt-4.5-preview",
-    "gpt-4o",
-    "gpt-4o-audio-preview",
-    "chatgpt-4o-latest",
-    "gpt-4o-mini",
-    "gpt-4o-mini-audio-preview",
-    "gpt-4.1",  # Added default big model
-    "gpt-4.1-mini" # Added default small model
-]
+# --- New, more flexible model routing configuration ---
+BIG_MODEL_PROVIDER = os.environ.get("BIG_MODEL_PROVIDER", "openai").lower()
+BIG_MODEL_NAME = os.environ.get("BIG_MODEL_NAME", "gpt-4.1")
+SMALL_MODEL_PROVIDER = os.environ.get("SMALL_MODEL_PROVIDER", "openai").lower()
+SMALL_MODEL_NAME = os.environ.get("SMALL_MODEL_NAME", "gpt-4.1-mini")
 
-# List of Gemini models (Note: These are often used via Google AI Studio, not Vertex directly)
-GEMINI_MODELS = [
-    "gemini-2.5-pro-preview-03-25",
-    "gemini-2.0-flash"
-    # Add other relevant Gemini models if needed
-]
+logger.info(f"🔧 Big model mapping: 'sonnet' -> {BIG_MODEL_PROVIDER}/{BIG_MODEL_NAME}")
+logger.info(f"🔧 Small model mapping: 'haiku' -> {SMALL_MODEL_PROVIDER}/{SMALL_MODEL_NAME}")
 
-# List of Vertex AI models (examples, adjust based on availability)
-# LiteLLM uses 'vertex_ai/' prefix for these
-VERTEX_AI_MODELS = [
-    "gemini-2.5-pro-preview-03-25",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash-preview-0514",
-    "gemini-1.5-pro-preview-0514",
-    "gemini-2.5-flash-preview-04-17" # Added for compatibility with newer models
-    # Add other specific Vertex AI model IDs
-]
-logger.info(f"🔵 Vertex AI models available: {', '.join(VERTEX_AI_MODELS)}")
-
-# GROQ_MODELS list removed
-
-# List of xAI models (examples, adjust based on availability/correct IDs)
-# LiteLLM uses 'xai/' prefix for these
-XAI_MODELS = [
-    "grok-3-mini-beta", # As per LiteLLM docs
-    "grok-2-vision-latest", # As per LiteLLM docs
-    "grok-3-beta", # Actual Grok-3 model
-    "grok-2", # Grok-2 model
-    "grok-1" # Grok-1 model
-]
-logger.info(f"🟣 xAI models available: {', '.join(XAI_MODELS)}")
-
+# Model lists (OPENAI_MODELS, GEMINI_MODELS, VERTEX_AI_MODELS, XAI_MODELS) have been removed
+# to allow for flexible, user-defined model names.
+# The logic now relies on provider prefixes (e.g., 'openai/') in the model name.
 
 # Helper function to clean schema for Gemini/Vertex
 def clean_gemini_schema(schema: Any) -> Any:
@@ -250,87 +247,36 @@ class MessagesRequest(BaseModel):
     tool_choice: Optional[Dict[str, Any]] = None
     thinking: Optional[ThinkingConfigClient] = None # Use the updated client-facing model
     original_model: Optional[str] = None  # Will store the original model name
+    is_mapped: bool = False # Internal flag to track if the model was mapped
 
     @field_validator('model')
     def validate_model_field(cls, v, info): # Renamed to avoid conflict
         original_model = v
         new_model = v # Default to original value
+        is_mapped_flag = False
 
-        logger.debug(f"📋 MODEL VALIDATION: Original='{original_model}', Preferred='{PREFERRED_PROVIDER}', BIG='{BIG_MODEL}', SMALL='{SMALL_MODEL}'")
+        logger.debug(f"📋 MODEL VALIDATION: Original='{original_model}'")
 
-        # Remove provider prefixes for easier matching
+        # Remove provider prefixes for haiku/sonnet matching
         clean_v = v
-        if clean_v.startswith('anthropic/'):
-            clean_v = clean_v[10:]
-        elif clean_v.startswith('openai/'):
-            clean_v = clean_v[7:]
-        elif clean_v.startswith('gemini/'):
-            clean_v = clean_v[7:]
-        elif clean_v.startswith('vertex_ai/'):
-            clean_v = clean_v[10:]
-        # elif clean_v.startswith('groq/'): # Removed Groq prefix check
-        #     clean_v = clean_v[5:]
-        elif clean_v.startswith('xai/'):
-            clean_v = clean_v[4:]
-
+        if '/' in clean_v:
+            # e.g., "openai/claude-3-haiku-20240307" -> "claude-3-haiku-20240307"
+            clean_v = clean_v.split('/', 1)[1]
 
         # --- Mapping Logic --- START ---
         mapped = False
-        # Map Haiku (small) based on provider preference
+
+        # Map Haiku (small) and Sonnet (big) based on independent provider configurations
         if 'haiku' in clean_v.lower():
-            if PREFERRED_PROVIDER == "xai" and SMALL_MODEL in XAI_MODELS:
-                new_model = f"xai/{SMALL_MODEL}"
-                mapped = True
-            # elif PREFERRED_PROVIDER == "groq" and SMALL_MODEL in GROQ_MODELS: # Removed Groq mapping
-            #     new_model = f"groq/{SMALL_MODEL}"
-            #     mapped = True
-            elif PREFERRED_PROVIDER == "vertex" and SMALL_MODEL in VERTEX_AI_MODELS:
-                 new_model = f"vertex_ai/{SMALL_MODEL}"
-                 mapped = True
-            elif PREFERRED_PROVIDER == "google" and SMALL_MODEL in GEMINI_MODELS:
-                new_model = f"gemini/{SMALL_MODEL}"
-                mapped = True
-            # Fallback to OpenAI
-            else:
-                new_model = f"openai/{SMALL_MODEL}"
-                mapped = True
-
-        # Map Sonnet (big) based on provider preference
+            provider = SMALL_MODEL_PROVIDER
+            if provider == "vertex": provider = "vertex_ai" # LiteLLM prefix for vertex
+            new_model = f"{provider}/{SMALL_MODEL_NAME}"
+            mapped = True
         elif 'sonnet' in clean_v.lower():
-            if PREFERRED_PROVIDER == "xai" and BIG_MODEL in XAI_MODELS:
-                new_model = f"xai/{BIG_MODEL}"
-                mapped = True
-            # elif PREFERRED_PROVIDER == "groq" and BIG_MODEL in GROQ_MODELS: # Removed Groq mapping
-            #     new_model = f"groq/{BIG_MODEL}"
-            #     mapped = True
-            elif PREFERRED_PROVIDER == "vertex" and BIG_MODEL in VERTEX_AI_MODELS:
-                new_model = f"vertex_ai/{BIG_MODEL}"
-                mapped = True
-            elif PREFERRED_PROVIDER == "google" and BIG_MODEL in GEMINI_MODELS:
-                new_model = f"gemini/{BIG_MODEL}"
-                mapped = True
-            # Fallback to OpenAI
-            else:
-                new_model = f"openai/{BIG_MODEL}"
-                mapped = True
-
-        # Add prefixes to non-mapped models if they match known lists
-        elif not mapped:
-            if clean_v in XAI_MODELS and not v.startswith('xai/'):
-                new_model = f"xai/{clean_v}"
-                mapped = True
-            # elif clean_v in GROQ_MODELS and not v.startswith('groq/'): # Removed Groq prefixing
-            #     new_model = f"groq/{clean_v}"
-            #     mapped = True
-            elif clean_v in VERTEX_AI_MODELS and not v.startswith('vertex_ai/'):
-                new_model = f"vertex_ai/{clean_v}"
-                mapped = True
-            elif clean_v in GEMINI_MODELS and not v.startswith('gemini/'):
-                new_model = f"gemini/{clean_v}"
-                mapped = True
-            elif clean_v in OPENAI_MODELS and not v.startswith('openai/'):
-                new_model = f"openai/{clean_v}"
-                mapped = True # Technically mapped to add prefix
+            provider = BIG_MODEL_PROVIDER
+            if provider == "vertex": provider = "vertex_ai"
+            new_model = f"{provider}/{BIG_MODEL_NAME}"
+            mapped = True
         # --- Mapping Logic --- END ---
 
         if mapped:
@@ -346,18 +292,20 @@ class MessagesRequest(BaseModel):
             else:
                 logger.info(f"📌 MODEL MAPPING: '{original_model}' ➡️ '{new_model}'")
         else:
-             # If no mapping occurred and no prefix exists, log warning or decide default
-             if not v.startswith(('openai/', 'gemini/', 'anthropic/', 'vertex_ai/', 'xai/')): # Removed 'groq/'
-                 logger.warning(f"⚠️ No prefix or mapping rule for model: '{original_model}'. Using as is.")
-                 new_model = v # Ensure we return the original if no rule applied or prefix exists
+             # If no mapping occurred, use the original model name.
+             # If it's prefixed, the downstream logic will handle it.
+             # If it's not prefixed, it will default to Anthropic or fail if no key is found.
+             new_model = v
+             if not v.startswith(('openai/', 'gemini/', 'anthropic/', 'vertex_ai/', 'xai/')):
+                 logger.warning(f"⚠️ No prefix or mapping rule for model: '{original_model}'. Using as is. It will default to the Anthropic provider if not otherwise handled.")
              else:
-                 new_model = v # Use the already prefixed model name
                  logger.debug(f"ℹ️ Using already prefixed model: '{new_model}'")
 
         # Store the original model in the values dictionary
         values = info.data
         if isinstance(values, dict):
             values['original_model'] = original_model
+            values['is_mapped'] = is_mapped_flag
 
         return new_model
 
@@ -369,90 +317,50 @@ class TokenCountRequest(BaseModel):
     thinking: Optional[ThinkingConfigClient] = None # Use the updated client-facing model
     tool_choice: Optional[Dict[str, Any]] = None
     original_model: Optional[str] = None  # Will store the original model name
+    is_mapped: bool = False # Internal flag to track if the model was mapped
 
     @field_validator('model')
     def validate_model_token_count(cls, v, info): # Renamed to avoid conflict
         # Use the same logic as MessagesRequest validator
         original_model = v
         new_model = v # Default to original value
+        is_mapped_flag = False
 
-        logger.debug(f"📋 TOKEN COUNT VALIDATION: Original='{original_model}', Preferred='{PREFERRED_PROVIDER}', BIG='{BIG_MODEL}', SMALL='{SMALL_MODEL}'")
+        logger.debug(f"📋 TOKEN COUNT VALIDATION: Original='{original_model}'")
 
-        # Remove provider prefixes for easier matching
+        # Remove provider prefixes for haiku/sonnet matching
         clean_v = v
-        if clean_v.startswith('anthropic/'):
-            clean_v = clean_v[10:]
-        elif clean_v.startswith('openai/'):
-            clean_v = clean_v[7:]
-        elif clean_v.startswith('gemini/'):
-            clean_v = clean_v[7:]
-        elif clean_v.startswith('vertex_ai/'):
-            clean_v = clean_v[10:]
-        elif clean_v.startswith('xai/'):
-            clean_v = clean_v[4:]
+        if '/' in clean_v:
+            clean_v = clean_v.split('/', 1)[1]
 
         # --- Mapping Logic --- START ---
-        # (Mirroring the logic from the main MessagesRequest validator)
         mapped = False
-        # Map Haiku (small) based on provider preference
+
         if 'haiku' in clean_v.lower():
-            if PREFERRED_PROVIDER == "xai" and SMALL_MODEL in XAI_MODELS:
-                new_model = f"xai/{SMALL_MODEL}"
-                mapped = True
-            elif PREFERRED_PROVIDER == "vertex" and SMALL_MODEL in VERTEX_AI_MODELS:
-                 new_model = f"vertex_ai/{SMALL_MODEL}"
-                 mapped = True
-            elif PREFERRED_PROVIDER == "google" and SMALL_MODEL in GEMINI_MODELS:
-                new_model = f"gemini/{SMALL_MODEL}"
-                mapped = True
-            else:
-                new_model = f"openai/{SMALL_MODEL}"
-                mapped = True
-
-        # Map Sonnet (big) based on provider preference
+            provider = SMALL_MODEL_PROVIDER
+            if provider == "vertex": provider = "vertex_ai"
+            new_model = f"{provider}/{SMALL_MODEL_NAME}"
+            mapped = True
         elif 'sonnet' in clean_v.lower():
-            if PREFERRED_PROVIDER == "xai" and BIG_MODEL in XAI_MODELS:
-                new_model = f"xai/{BIG_MODEL}"
-                mapped = True
-            elif PREFERRED_PROVIDER == "vertex" and BIG_MODEL in VERTEX_AI_MODELS:
-                new_model = f"vertex_ai/{BIG_MODEL}"
-                mapped = True
-            elif PREFERRED_PROVIDER == "google" and BIG_MODEL in GEMINI_MODELS:
-                new_model = f"gemini/{BIG_MODEL}"
-                mapped = True
-            else:
-                new_model = f"openai/{BIG_MODEL}"
-                mapped = True
-
-        # Add prefixes to non-mapped models if they match known lists
-        elif not mapped:
-            if clean_v in XAI_MODELS and not v.startswith('xai/'):
-                new_model = f"xai/{clean_v}"
-                mapped = True
-            elif clean_v in VERTEX_AI_MODELS and not v.startswith('vertex_ai/'):
-                new_model = f"vertex_ai/{clean_v}"
-                mapped = True
-            elif clean_v in GEMINI_MODELS and not v.startswith('gemini/'):
-                new_model = f"gemini/{clean_v}"
-                mapped = True
-            elif clean_v in OPENAI_MODELS and not v.startswith('openai/'):
-                new_model = f"openai/{clean_v}"
-                mapped = True # Technically mapped to add prefix
+            provider = BIG_MODEL_PROVIDER
+            if provider == "vertex": provider = "vertex_ai"
+            new_model = f"{provider}/{BIG_MODEL_NAME}"
+            mapped = True
         # --- Mapping Logic --- END ---
 
         if mapped:
             logger.debug(f"📌 TOKEN COUNT MAPPING: '{original_model}' ➡️ '{new_model}'")
         else:
+             new_model = v # Use the original value
              if not v.startswith(('openai/', 'gemini/', 'anthropic/', 'vertex_ai/', 'xai/')):
                  logger.warning(f"⚠️ No prefix or mapping rule for token count model: '{original_model}'. Using as is.")
-                 new_model = v # Ensure we return the original if no rule applied or prefix exists
-             else:
-                 new_model = v # Use the already prefixed model name
+             # else: it's already prefixed, no special log needed here
 
         # Store the original model in the values dictionary
         values = info.data
         if isinstance(values, dict):
             values['original_model'] = original_model
+            values['is_mapped'] = is_mapped_flag
 
         return new_model
 
@@ -602,14 +510,19 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
                                       messages.append({"role": msg.role, "content": None, "tool_calls": []})
                                  messages[-1]["tool_calls"].append(tool_call_data)
                              else:
-                                 logger.warning(f"Unexpected tool_use block in user message: {block}")
+                                 logger.error("Invalid Request: A 'tool_use' content block is only allowed in an 'assistant' message. This block will be ignored.")
 
                         elif block.type == "tool_result":
-                             messages.append({
-                                 "role": "tool",
-                                 "tool_call_id": block.tool_use_id,
-                                 "content": parse_tool_result_content(getattr(block, "content", None))
-                             })
+                             if msg.role == 'user':
+                                 messages.append({
+                                     "role": "tool",
+                                     "tool_call_id": block.tool_use_id,
+                                     "content": parse_tool_result_content(getattr(block, "content", None))
+                                 })
+                             else:
+                                 logger.error("Invalid Request: A 'tool_result' content block is only allowed in a 'user' message. This block will be ignored.")
+                        else:
+                            logger.error(f"Unsupported content block type: '{getattr(block, 'type', 'unknown')}'. This block will be ignored.")
                 if processed_content:
                      if messages and messages[-1]["role"] == "assistant" and messages[-1].get("content") is None and messages[-1].get("tool_calls"):
                          messages[-1]["content"] = processed_content
@@ -835,78 +748,74 @@ async def create_message(
     try:
         body = await raw_request.body()
         body_json = json.loads(body.decode('utf-8'))
-        original_model = body_json.get("model", "unknown")
+        # Use the original model name from the raw request for display purposes.
+        original_model_for_display = body_json.get("model", "unknown")
 
-        display_model = original_model
+        display_model = original_model_for_display
         if "/" in display_model: display_model = display_model.split("/")[-1]
 
-        # Clean model name for logging/prefix check
-        provider_prefix = ""
-        clean_model_name = request.model
-        if clean_model_name.startswith("anthropic/"): provider_prefix = "anthropic/"; clean_model_name = clean_model_name[len(provider_prefix):]
-        elif clean_model_name.startswith("openai/"): provider_prefix = "openai/"; clean_model_name = clean_model_name[len(provider_prefix):]
-        elif clean_model_name.startswith("gemini/"): provider_prefix = "gemini/"; clean_model_name = clean_model_name[len(provider_prefix):]
-        elif clean_model_name.startswith("vertex_ai/"): provider_prefix = "vertex_ai/"; clean_model_name = clean_model_name[len(provider_prefix):]
-        # elif clean_model_name.startswith("groq/"): provider_prefix = "groq/"; clean_model_name = clean_model_name[len(provider_prefix):] # Removed Groq check
-        elif clean_model_name.startswith("xai/"): provider_prefix = "xai/"; clean_model_name = clean_model_name[len(provider_prefix):]
-
-
-        logger.debug(f"📊 PROCESSING REQUEST: Original Model='{original_model}', Mapped Model='{request.model}', Stream={request.stream}")
+        logger.debug(f"📊 PROCESSING REQUEST: Original Model='{original_model_for_display}', Mapped Model='{request.model}', Stream={request.stream}, IsMapped={request.is_mapped}")
 
         # Convert Anthropic request to LiteLLM format
         litellm_request = convert_anthropic_to_litellm(request)
 
-        # Determine API key/credentials based on the final model's provider prefix
-        if request.model.startswith("openai/"):
-            litellm_request["api_key"] = OPENAI_API_KEY
-            logger.debug(f"Using OpenAI API key for model: {request.model}")
-        elif request.model.startswith("gemini/"): # Google AI Studio
-            litellm_request["api_key"] = GEMINI_API_KEY
-            logger.debug(f"Using Gemini (Google AI Studio) API key for model: {request.model}")
-        elif request.model.startswith("vertex_ai/"):
-            if VERTEX_PROJECT_ID:
-                litellm_request["vertex_project"] = VERTEX_PROJECT_ID
-                litellm_request["vertex_location"] = VERTEX_LOCATION
-                logger.info(f"🔵 Using Vertex AI credentials (Project: {VERTEX_PROJECT_ID}, Location: {VERTEX_LOCATION}) for model: {request.model}")
-
-                # Check for Application Default Credentials or service account
-                if GOOGLE_APPLICATION_CREDENTIALS:
-                    logger.info(f"🔵 Vertex AI using service account from: {GOOGLE_APPLICATION_CREDENTIALS}")
+        # --- Dynamic Credential/Endpoint Injection ---
+        # This logic determines which API key and base URL to use based on the request type.
+        if request.is_mapped:
+            # Tier 1: Mapped requests ('sonnet'/'haiku') use their specific configurations.
+            original_clean = original_model_for_display.split('/')[-1]
+            if 'haiku' in original_clean.lower():
+                if SMALL_MODEL_API_KEY: litellm_request["api_key"] = SMALL_MODEL_API_KEY
+                if SMALL_MODEL_API_BASE: litellm_request["api_base"] = SMALL_MODEL_API_BASE
+                logger.debug(f"Using SMALL model mapped credentials for {request.model}")
+            elif 'sonnet' in original_clean.lower():
+                if BIG_MODEL_API_KEY: litellm_request["api_key"] = BIG_MODEL_API_KEY
+                if BIG_MODEL_API_BASE: litellm_request["api_base"] = BIG_MODEL_API_BASE
+                logger.debug(f"Using BIG model mapped credentials for {request.model}")
+        else:
+            # Tier 2: Direct, prefixed requests use the global provider configurations.
+            provider = request.model.split('/')[0] if '/' in request.model else None
+            if provider == "openai":
+                if OPENAI_API_KEY: litellm_request["api_key"] = OPENAI_API_KEY
+                if OPENAI_API_BASE: litellm_request["api_base"] = OPENAI_API_BASE
+                logger.debug(f"Using global OpenAI credentials for {request.model}")
+            elif provider == "gemini":
+                if GEMINI_API_KEY: litellm_request["api_key"] = GEMINI_API_KEY
+                if GEMINI_API_BASE: litellm_request["api_base"] = GEMINI_API_BASE
+                logger.debug(f"Using global Gemini credentials for {request.model}")
+            elif provider == "xai":
+                if XAI_API_KEY: litellm_request["api_key"] = XAI_API_KEY
+                if XAI_API_BASE: litellm_request["api_base"] = XAI_API_BASE
+                logger.debug(f"Using global xAI credentials for {request.model}")
+            elif provider == "anthropic":
+                if ANTHROPIC_API_KEY: litellm_request["api_key"] = ANTHROPIC_API_KEY
+                if ANTHROPIC_API_BASE: litellm_request["api_base"] = ANTHROPIC_API_BASE
+                logger.debug(f"Using global Anthropic credentials for {request.model}")
+            elif provider == "vertex_ai":
+                # Vertex AI uses project/location instead of a single base URL.
+                if VERTEX_PROJECT_ID:
+                    litellm_request["vertex_project"] = VERTEX_PROJECT_ID
+                    litellm_request["vertex_location"] = VERTEX_LOCATION
+                    logger.debug(f"Using Vertex AI credentials for {request.model}")
                 else:
-                    logger.info("🔵 Vertex AI using Application Default Credentials (ADC)")
+                    logger.warning(f"⚠️ VERTEX_PROJECT_ID not set for Vertex AI model {request.model}.")
             else:
-                logger.warning(f"⚠️ VERTEX_PROJECT_ID not set for Vertex AI model {request.model}. LiteLLM will attempt default auth but may fail.")
-        # elif request.model.startswith("groq/"): # Removed Groq block
-        #     litellm_request["api_key"] = GROQ_API_KEY
-        #     logger.debug(f"Using Groq API key for model: {request.model}")
-        elif request.model.startswith("xai/"):
-            if XAI_API_KEY:
-                litellm_request["api_key"] = XAI_API_KEY
-                logger.info(f"🟣 Using xAI API key for model: {request.model}")
+                # Fallback for models without a known prefix or a dedicated API key.
+                if ANTHROPIC_API_KEY: litellm_request["api_key"] = ANTHROPIC_API_KEY
+                logger.debug(f"Using default Anthropic API key for model: {request.model}")
 
-                # Validate model name against known models
-                model_name = request.model.replace("xai/", "")
-                if model_name in XAI_MODELS:
-                    logger.info(f"🟣 Validated xAI model: {model_name}")
-                else:
-                    logger.warning(f"⚠️ Unknown xAI model: {model_name}. Request may fail.")
-            else:
-                logger.error(f"❌ XAI_API_KEY not set for xAI model: {request.model}. Request will fail.")
-        else: # Default to Anthropic if no other known prefix
-            litellm_request["api_key"] = ANTHROPIC_API_KEY
-            logger.debug(f"Using default Anthropic API key for model: {request.model}")
-
-        # Specific provider adjustments (Example for OpenAI, might need for others)
-        if request.model.startswith("openai/") and "messages" in litellm_request:
-            # OpenAI specific message processing... (keep existing logic if needed)
-            pass # Keep the OpenAI specific message processing logic here if it's still relevant
-
-        logger.debug(f"LiteLLM Request (keys filtered): { {k:v for k,v in litellm_request.items() if k != 'api_key'} }")
+        if LOG_REQUEST_BODY:
+            # Log the request for debugging, filtering out the API key.
+            request_for_logging = {k: v for k, v in litellm_request.items() if k != 'api_key'}
+            try:
+                logger.debug(f"LiteLLM Request Body:\n{json.dumps(request_for_logging, indent=2, ensure_ascii=False)}")
+            except Exception:
+                logger.debug(f"LiteLLM Request Body (fallback): {request_for_logging}")
 
         num_tools = len(request.tools) if request.tools else 0
         log_request_beautifully(
-            "POST", raw_request.url.path, display_model, request.model, # Use mapped model name for logging
-            len(litellm_request['messages']), num_tools, 200 # Assuming success for logging before call
+            "POST", raw_request.url.path, display_model, request.model,
+            len(litellm_request['messages']), num_tools, 200
         )
 
         if request.stream:
@@ -915,8 +824,14 @@ async def create_message(
         else:
             start_time = time.time()
             logger.info(f"🚀 Sending request to {request.model}...")
-            litellm_response = await litellm.acompletion(**litellm_request) # Use async for consistency
+            litellm_response = await litellm.acompletion(**litellm_request)
             elapsed_time = time.time() - start_time
+
+            if LOG_RESPONSE_BODY:
+                try:
+                    logger.debug(f"LiteLLM Response Body:\n{json.dumps(litellm_response.model_dump(), indent=2, ensure_ascii=False)}")
+                except Exception:
+                    logger.debug(f"LiteLLM Response Body (fallback): {litellm_response}")
 
             # Enhanced provider-specific response logging
             if request.model.startswith("vertex_ai/"):

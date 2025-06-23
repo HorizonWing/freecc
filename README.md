@@ -1,203 +1,145 @@
-# Anthropic API Proxy for Gemini, OpenAI, Vertex AI & xAI Models 🔄
+# Any LLM in Claude Code
 
-**Use Anthropic clients (like Claude Code) with Gemini, OpenAI, Vertex AI, or xAI backends.** 🤝
+[简体中文](README_zh.md)
 
-A proxy server that lets you use Anthropic clients with multiple LLM providers via LiteLLM. 🌉
+> **Note**: This project is a fork of [CogAgent/claude-code-proxy](https://github.com/CogAgent/claude-code-proxy).
 
+**Use any LiteLLM-supported model in Claude Code without Pro subscription!**
+
+This is an Anthropic API proxy that translates API requests from Claude Code into the format of any backend service supported by LiteLLM.
 
 ![Anthropic API Proxy](pic.png)
 
-## Quick Start ⚡
+## Quick Start
 
 ### Prerequisites
 
-- OpenAI API key 🔑 (if using OpenAI provider)
-- Google AI Studio (Gemini) API key 🔑 (if using Google provider)
-- Google Cloud Project with Vertex AI API enabled 🔑 (if using Vertex AI provider)
-- xAI API key 🔑 (if using xAI provider)
+- An API key for the model you want to use.
 - [uv](https://github.com/astral-sh/uv) installed.
 
-### Setup 🛠️
+### Installation and Configuration
 
-1. **Clone this repository**:
-   ```bash
-   git clone https://github.com/CogAgent/claude-code-proxy.git
-   cd claude-code-proxy
-   ```
+1.  **Clone this repository**:
+    ```bash
+    git clone https://github.com/chachakko/freecc.git
+    cd freecc
+    ```
 
-2. **Install uv** (if you haven't already):
-   ```bash
-   curl -LsSf https://astral.sh/uv/install.sh | sh
-   ```
-   *(`uv` will handle dependencies based on `pyproject.toml` when you run the server)*
+2.  **Install uv** (if you haven't already):
+    ```bash
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
+    *(uv will handle dependencies based on `pyproject.toml` when you run the server)*
 
-3. **Configure Environment Variables**:
-   Copy the example environment file:
-   ```bash
-   cp .env.example .env
-   ```
-   Edit `.env` and fill in your API keys and model configurations:
+3.  **Configure Environment Variables**:
+    Copy the example environment file:
+    ```bash
+    cp .env.example .env
+    ```
+    Edit the `.env` file to set up your model routing.
 
-   *   `ANTHROPIC_API_KEY`: (Optional) Needed only if proxying *to* Anthropic models.
-   *   `OPENAI_API_KEY`: Your OpenAI API key (Required if using the default OpenAI preference or as fallback).
-   *   `GEMINI_API_KEY`: Your Google AI Studio (Gemini) API key (Required if PREFERRED_PROVIDER=google).
-   *   `XAI_API_KEY`: Your xAI API key (Required if PREFERRED_PROVIDER=xai).
+    **Model Mapping Configuration**
 
-   **For Vertex AI:**
-   *   `VERTEX_PROJECT_ID`: Your Google Cloud Project ID (Required if PREFERRED_PROVIDER=vertex).
-   *   `VERTEX_LOCATION`: Region where your Vertex AI resources are located (defaults to us-central1).
-   *   Set up Application Default Credentials (ADC) with `gcloud auth application-default login` or set `GOOGLE_APPLICATION_CREDENTIALS` to point to your service account key file.
+    > Claude Code calls a small model, `haiku`, for auxiliary tasks in the background, so you can choose a fast, low-cost model. For the main tasks, it calls a large model, `sonnet`.
 
-   **Provider and Model Configuration:**
-   *   `PREFERRED_PROVIDER` (Optional): Set to `openai` (default), `google`, `vertex`, or `xai`. This determines the primary backend for mapping `haiku`/`sonnet`.
-   *   `BIG_MODEL` (Optional): The model to map `sonnet` requests to. Defaults vary by provider.
-   *   `SMALL_MODEL` (Optional): The model to map `haiku` requests to. Defaults vary by provider.
+    This is the primary configuration for routing `sonnet` and `haiku` model requests. It allows you to point these common model types to specific providers, each with its own API key and base URL.
 
-   **Mapping Logic:**
-   - If `PREFERRED_PROVIDER=openai` (default), `haiku`/`sonnet` map to `SMALL_MODEL`/`BIG_MODEL` prefixed with `openai/`.
-   - If `PREFERRED_PROVIDER=google`, `haiku`/`sonnet` map to `SMALL_MODEL`/`BIG_MODEL` prefixed with `gemini/`.
-   - If `PREFERRED_PROVIDER=vertex`, `haiku`/`sonnet` map to `SMALL_MODEL`/`BIG_MODEL` prefixed with `vertex_ai/`.
-   - If `PREFERRED_PROVIDER=xai`, `haiku`/`sonnet` map to `SMALL_MODEL`/`BIG_MODEL` prefixed with `xai/`.
+    -   `BIG_MODEL_PROVIDER`: Provider for "big" models (e.g., `openai`, `vertex`, `xai`).
+    -   `BIG_MODEL_NAME`: The actual model name to use (e.g., `gpt-4.1`).
+    -   `BIG_MODEL_API_KEY`: The API key for this provider.
+    -   `BIG_MODEL_API_BASE`: (Optional) A custom API endpoint for this provider.
 
-4. **Run the server**:
-   ```bash
-   uv run uvicorn server:app --host 0.0.0.0 --port 8082 --reload
-   ```
-   *(`--reload` is optional, for development)*
+    -   `SMALL_MODEL_PROVIDER`: Provider for "small" models.
+    -   `SMALL_MODEL_NAME`: The actual model name to use.
+    -   `SMALL_MODEL_API_KEY`: The API key for this provider.
+    -   `SMALL_MODEL_API_BASE`: (Optional) A custom API endpoint.
 
-### Using with Claude Code 🎮
+    **Global Provider Configuration**
 
-1. **Install Claude Code** (if you haven't already):
-   ```bash
-   npm install -g @anthropic-ai/claude-code
-   ```
+    This configuration is for direct, provider-prefixed requests (e.g., `openai/gpt-4o-mini`). It also acts as a fallback for mapped models if a specific key or base URL is not provided above.
 
-2. **Connect to your proxy**:
-   ```bash
-   ANTHROPIC_BASE_URL=http://localhost:8082 claude
-   ```
+    -   `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `ANTHROPIC_API_KEY`
+    -   `OPENAI_API_BASE`, `GEMINI_API_BASE`, `XAI_API_BASE`, `ANTHROPIC_API_BASE`
 
-3. **That's it!** Your Claude Code client will now use the configured backend models (defaulting to Gemini) through the proxy. 🎯
+    **Vertex AI Specifics:**
+    Vertex AI requires a Project ID and Location. These are global settings:
+    -   `VERTEX_PROJECT_ID`: Your Google Cloud Project ID.
+    -   `VERTEX_LOCATION`: The region for your Vertex AI resources.
+    -   Set up Application Default Credentials (ADC) via `gcloud` or set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable.
 
-## Model Mapping 🗺️
+4.  **Run the server**:
+    ```bash
+    uv run uvicorn server:app --host 0.0.0.0 --port 8082 --reload
+    ```
+    *(`--reload` is optional for development)*
 
-The proxy automatically maps Claude models to OpenAI, Gemini, Vertex AI, or xAI models based on the configured provider:
+### Using with Claude Code
 
-| Claude Model | OpenAI (default) | Gemini | Vertex AI | xAI |
-|--------------|-----------------|--------|-----------|-----|
-| haiku | openai/gpt-4.1-mini | gemini/gemini-2.0-flash | vertex_ai/gemini-2.0-flash | xai/grok-3-mini-beta |
-| sonnet | openai/gpt-4.1 | gemini/gemini-2.5-pro-preview-03-25 | vertex_ai/gemini-2.5-pro-preview-03-25 | xai/grok-3 |
+1.  **Install Claude Code** (if you haven't already):
+    ```bash
+    npm install -g @anthropic-ai/claude-code
+    ```
 
-### Supported Models
+2.  **Connect to your proxy**:
+    ```bash
+    export ANTHROPIC_BASE_URL=http://localhost:8082 && claude
+    ```
 
-#### OpenAI Models
-The following OpenAI models are supported with automatic `openai/` prefix handling:
-- o3-mini
-- o1
-- o1-mini
-- o1-pro
-- gpt-4.5-preview
-- gpt-4o
-- gpt-4o-audio-preview
-- chatgpt-4o-latest
-- gpt-4o-mini
-- gpt-4o-mini-audio-preview
-- gpt-4.1
-- gpt-4.1-mini
+3.  **Enjoy!** Embrace a Claude Code with a larger context window.
 
-#### Gemini Models
-The following Gemini models are supported with automatic `gemini/` prefix handling:
-- gemini-2.5-pro-preview-03-25
-- gemini-2.0-flash
+### Configuration Examples
 
-#### Vertex AI Models
-The following Vertex AI models are supported with automatic `vertex_ai/` prefix handling:
-- gemini-2.5-pro-preview-03-25
-- gemini-2.5-flash-preview-04-17
-- gemini-2.0-flash
-- gemini-1.5-flash-preview-0514
-- gemini-1.5-pro-preview-0514
-
-#### xAI Models
-The following xAI models are supported with automatic `xai/` prefix handling:
-- grok-3-mini-beta
-- grok-3-beta
-- grok-2-vision-latest
-- grok-2
-- grok-1
-
-### Model Prefix Handling
-The proxy automatically adds the appropriate prefix to model names:
-- OpenAI models get the `openai/` prefix
-- Gemini models get the `gemini/` prefix
-- Vertex AI models get the `vertex_ai/` prefix
-- xAI models get the `xai/` prefix
-- The BIG_MODEL and SMALL_MODEL will get the appropriate prefix based on the provider and model lists
-
-For example:
-- `gpt-4o` becomes `openai/gpt-4o`
-- `gemini-2.5-pro-preview-03-25` becomes `gemini/gemini-2.5-pro-preview-03-25` or `vertex_ai/gemini-2.5-pro-preview-03-25` depending on the provider
-- `grok-3` becomes `xai/grok-3`
-
-### Customizing Model Mapping
-
-Control the mapping using environment variables in your `.env` file or directly:
-
-**Example 1: Default (Use OpenAI)**
+**Example 1: Standard OpenAI API Compatible Configuration**
+*Map both large and small models to different OpenAI models.*
 ```dotenv
-OPENAI_API_KEY="your-openai-key"
-# PREFERRED_PROVIDER="openai" # Optional, it's the default
-# BIG_MODEL="gpt-4.1" # Optional, it's the default
-# SMALL_MODEL="gpt-4.1-mini" # Optional, it's the default
+# .env
+BIG_MODEL_PROVIDER="openai"
+BIG_MODEL_NAME="gpt-4.1"
+BIG_MODEL_API_KEY="sk-..."
+
+SMALL_MODEL_PROVIDER="openai"
+SMALL_MODEL_NAME="gpt-4o-mini"
+SMALL_MODEL_API_KEY="sk-..."
+SMALL_MODEL_API_BASE="https://xyz.llm.com/v1" # Can be a different BASE URL
 ```
 
-**Example 2: Use Google AI Studio**
+**Example 2**
+*Use a fast model for `haiku` and a powerful model for `sonnet`.*
 ```dotenv
-GEMINI_API_KEY="your-google-key"
-OPENAI_API_KEY="your-openai-key" # Needed for fallback
-PREFERRED_PROVIDER="google"
-# BIG_MODEL="gemini-2.5-pro-preview-03-25" # Optional, it's the default for Google pref
-# SMALL_MODEL="gemini-2.0-flash" # Optional, it's the default for Google pref
+# .env
+# For 'sonnet', use Vertex AI's Gemini 1.5 Pro
+BIG_MODEL_PROVIDER="vertex"
+BIG_MODEL_NAME="gemini-1.5-pro-preview-0514"
+VERTEX_PROJECT_ID="your-gcp-project-id" # Required for Vertex
+
+# For 'haiku', use a local, OpenAI-compatible model running on port 8000
+SMALL_MODEL_PROVIDER="openai"
+SMALL_MODEL_NAME="local-llama-3"
+SMALL_MODEL_API_BASE="http://localhost:8000/v1"
+SMALL_MODEL_API_KEY="lm-studio" # A key might not be needed for local models
 ```
 
-**Example 3: Use Vertex AI**
-```dotenv
-VERTEX_PROJECT_ID="your-gcp-project-id"
-VERTEX_LOCATION="us-central1"
-# Set GOOGLE_APPLICATION_CREDENTIALS or use gcloud auth application-default login
-PREFERRED_PROVIDER="vertex"
-BIG_MODEL="gemini-2.5-pro-preview-03-25"
-SMALL_MODEL="gemini-2.0-flash"
-```
+## How It Works
 
-**Example 4: Use xAI**
-```dotenv
-XAI_API_KEY="your-xai-api-key"
-PREFERRED_PROVIDER="xai"
-BIG_MODEL="grok-3"
-SMALL_MODEL="grok-3-mini-beta"
-```
+When a request from Claude Code contains a model name like `sonnet` or `haiku` (e.g., `claude-3-sonnet-20240229`), this proxy uses your configured `BIG_MODEL_*` or `SMALL_MODEL_*` variables to route the request. This means you can replace the default Claude Sonnet 4 in CC with any model that is cheaper or has a larger context window.
 
-**Example 5: Use Specific OpenAI Models**
-```dotenv
-OPENAI_API_KEY="your-openai-key"
-PREFERRED_PROVIDER="openai"
-BIG_MODEL="gpt-4o" # Example specific model
-SMALL_MODEL="gpt-4o-mini" # Example specific model
-```
+As long as the provider and model name are valid for LiteLLM, the proxy request will work.
 
-## How It Works 🧩
+The process is as follows:
 
-This proxy works by:
+1.  **Receive Request**: Receives the request in Anthropic API format.
+2.  **Translate Format**: Translates the request to the target provider's format via LiteLLM.
+3.  **Inject Credentials**: Dynamically injects the API key and endpoint based on your configuration.
+4.  **Send Request**: Sends the translated request to the selected provider.
+5.  **Translate Response**: Converts the provider's response back to the Anthropic format.
+6.  **Return Response**: Returns the formatted response to the client.
 
-1. **Receiving requests** in Anthropic's API format 📥
-2. **Translating** the requests to the appropriate format via LiteLLM 🔄
-3. **Sending** the translated request to the selected provider (OpenAI, Gemini, Vertex AI, or xAI) 📤
-4. **Converting** the response back to Anthropic format 🔄
-5. **Returning** the formatted response to the client ✅
+> If you are interested in the prompt engineering behind Claude Code, set `LOG_REQUEST_BODY=true` in your `.env` file, and this proxy will print the complete request to the `claude-proxy.log` file.
 
-The proxy handles both streaming and non-streaming responses, maintaining compatibility with all Claude clients. It also handles provider-specific authentication and configuration requirements. 🌊
+## Vibe
 
-## Contributing 🤝
+This project is maintained by Claude Code & Gemini 2.5 Pro 🤪.
 
-Contributions are welcome! Please feel free to submit a Pull Request. 🎁
+## Contributing
+
+Pull Requests are welcome.

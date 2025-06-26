@@ -1,0 +1,16 @@
+services:
+  workspace:
+    build:
+      context: .
+    container_name: workspace
+    working_dir: /code
+    volumes:
+      - ..:/code
+    ports:
+      - "8082:8082"
+    command: freecc
+    environment:
+      - ENV=development
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
